@@ -1,7 +1,7 @@
 {
   "expo": {
-    "name": "my-ai-app",
-    "slug": "my-ai-app",
+    "name": "Abdul AI",
+    "slug": "Abdul-AI",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
@@ -9,7 +9,8 @@
     "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "bundleIdentifier": "com.abrar.ai"
     },
     "android": {
       "adaptiveIcon": {
@@ -19,7 +20,15 @@
         "monochromeImage": "./assets/images/android-icon-monochrome.png"
       },
       "edgeToEdgeEnabled": true,
-      "predictiveBackGestureEnabled": false
+      "predictiveBackGestureEnabled": false,
+      "package": "com.abrar.ai",
+      "usesCleartextTraffic": true, 
+      "permissions": [
+        "INTERNET",
+        "READ_EXTERNAL_STORAGE",
+        "WRITE_EXTERNAL_STORAGE",
+        "ACCESS_NETWORK_STATE"
+      ]
     },
     "web": {
       "output": "static",
@@ -27,6 +36,13 @@
     },
     "plugins": [
       "expo-router",
+      "./withCleartextTraffic.js",
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "The app accesses your photos to let you pick images for processing."
+        }
+      ],
       [
         "expo-splash-screen",
         {
@@ -38,11 +54,27 @@
             "backgroundColor": "#000000"
           }
         }
+      ],
+      [
+        "expo-media-library",
+        {
+          "photosPermission": "Allow $(PRODUCT_NAME) to save photos.",
+          "savePhotosPermission": "Allow $(PRODUCT_NAME) to save photos.",
+          "isAccessMediaLocationEnabled": true
+        }
       ]
     ],
     "experiments": {
       "typedRoutes": true,
       "reactCompiler": true
+    },
+    "extra": {
+      "router": {
+        "origin": false
+      },
+      "eas": {
+        "projectId": "c93c71af-b322-4b6b-b41b-c79f2d0b9e1b"
+      }
     }
   }
 }

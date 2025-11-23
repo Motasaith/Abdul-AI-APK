@@ -1,85 +1,133 @@
 import { StyleSheet, Image, View, Text, TouchableOpacity, ActivityIndicator, Alert, Pressable } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
 import * as MediaLibrary from 'expo-media-library';
-import { useState, useRef } from 'react';
-import { removeBackground } from '../../services/api'; 
-import { Ionicons } from '@expo/vector-icons';
-// FIX: Use 'legacy' import
+// FIX: Use 'legacy' import for SDK 54+ support
 import * as FileSystem from 'expo-file-system/legacy';
+import { useState, useRef } from 'react';
+import { restoreImage, checkJobStatus } from '../../services/api'; 
+import { Ionicons } from '@expo/vector-icons';
 
-export default function RemoverScreen() {
+export default function RestoreScreen() {
   const [image, setImage] = useState<string | null>(null);
   const [processedImage, setProcessedImage] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const [statusMessage, setStatusMessage] = useState("");
   const [isComparing, setIsComparing] = useState(false);
-  
+
   const abortController = useRef<AbortController | null>(null);
+  const intervalRef = useRef<NodeJS.Timeout | null>(null);
 
   const pickImage = async () => {
     let result = await ImagePicker.launchImageLibraryAsync({
       mediaTypes: ImagePicker.MediaTypeOptions.Images,
-      allowsEditing: true, 
+      allowsEditing: true,
       quality: 1,
     });
 
     if (!result.canceled) {
       setImage(result.assets[0].uri);
       setProcessedImage(null);
+      setStatusMessage("");
     }
   };
 
   const handleProcess = async () => {
     if (!image) return;
     setLoading(true);
+    setStatusMessage("Uploading...");
     
     abortController.current = new AbortController();
 
     try {
-      const resultUrl = await removeBackground(image, abortController.current.signal);
-      setProcessedImage(resultUrl);
+      const initialResponse = await restoreImage(image, abortController.current.signal);
+      const jobId = initialResponse.job_id;
+      if (!jobId) throw new Error("No Job ID received");
+
+      setStatusMessage("AI Enhancing (Wait ~5-10 min)...");
+      let attempts = 0;
+      const maxAttempts = 500;
+      
+      intervalRef.current = setInterval(async () => {
+        try {
+          if (abortController.current?.signal.aborted) {
+             if (intervalRef.current) clearInterval(intervalRef.current);
+             return;
+          }
+
+          attempts++;
+          const statusData = await checkJobStatus(jobId, abortController.current?.signal);
+          console.log(`Attempt ${attempts}:`, statusData.status);
+
+          if (statusData.status === 'completed' || statusData.status === 'success') {
+            if (intervalRef.current) clearInterval(intervalRef.current);
+            let serverPath = "";
+            if (statusData.results && statusData.results.length > 0) {
+              serverPath = statusData.results[0].url;
+            } else if (statusData.output_url) {
+              serverPath = statusData.output_url;
+            }
+
+            if (serverPath) {
+              const fullUrl = serverPath.startsWith('http') ? serverPath : `http://167.88.43.163:8001${serverPath}`;
+              setProcessedImage(fullUrl);
+              setLoading(false);
+              setStatusMessage("Done!");
+            }
+          } else if (attempts >= maxAttempts) {
+            if (intervalRef.current) clearInterval(intervalRef.current);
+            Alert.alert("Timeout", "Server took too long.");
+            setLoading(false);
+          }
+        } catch (err: any) { 
+            if (err.message !== 'Canceled') console.error(err); 
+        }
+      }, 2000); 
+
     } catch (e: any) {
       if (e.message !== 'Canceled') {
         Alert.alert("Error", `Failed: ${e.message}`);
       }
-    } finally {
       setLoading(false);
-      abortController.current = null;
     }
   };
 
   const handleCancel = () => {
     if (abortController.current) {
       abortController.current.abort();
-      setLoading(false);
     }
+    if (intervalRef.current) {
+      clearInterval(intervalRef.current);
+    }
+    setLoading(false);
+    setStatusMessage("Canceled");
   };
 
   const handleSave = async () => {
     if (!processedImage) return;
     try {
       const { status } = await MediaLibrary.requestPermissionsAsync(false);
-      
       if (status !== 'granted') {
-        Alert.alert("Permission needed", "Please allow access to save photos in settings.");
+        Alert.alert("Permission needed", "Please allow access to save photos.");
         return;
       }
 
+      // Use Legacy FileSystem
       const fs = FileSystem as any;
       const docDir = fs.documentDirectory || fs.cacheDirectory;
-      const filename = docDir + "removed_bg.png";
+      const fileUri = docDir + "upscaled_image.png";
 
-      const base64Data = processedImage.split(',')[1]; 
+      setLoading(true); 
+      setStatusMessage("Downloading...");
       
-      // Using legacy function
-      await FileSystem.writeAsStringAsync(filename, base64Data, {
-        encoding: 'base64', 
-      });
-
-      await MediaLibrary.saveToLibraryAsync(filename);
-
-      Alert.alert("Saved!", "Image saved to your Gallery.");
+      // This function exists in 'expo-file-system/legacy'
+      const downloadRes = await FileSystem.downloadAsync(processedImage, fileUri);
+      
+      await MediaLibrary.saveToLibraryAsync(downloadRes.uri);
+      
+      setLoading(false);
+      Alert.alert("Saved!", "High-res image saved to your Gallery.");
     } catch (e: any) {
-      console.log(e);
+      setLoading(false);
       Alert.alert("Save Failed", e.message);
     }
   };
@@ -88,11 +136,16 @@ export default function RemoverScreen() {
 
   return (
     <View style={styles.container}>
-      <Text style={styles.headerTitle}>✂️ Magic Remover</Text>
+      <Text style={styles.headerTitle}>✨ Super Upscaler</Text>
       
       <View style={styles.card}>
         <View style={styles.imageContainer}>
-          {activeImage ? (
+          {loading ? (
+            <View style={styles.loadingContainer}>
+              <ActivityIndicator size="large" color="#BB86FC" />
+              <Text style={styles.loadingText}>{statusMessage}</Text>
+            </View>
+          ) : activeImage ? (
             <Pressable 
               onPressIn={() => processedImage && setIsComparing(true)} 
               onPressOut={() => setIsComparing(false)}
@@ -108,7 +161,7 @@ export default function RemoverScreen() {
           ) : (
             <View style={styles.placeholder}>
               <Ionicons name="image-outline" size={50} color="#555" />
-              <Text style={styles.placeholderText}>Select an image to start</Text>
+              <Text style={styles.placeholderText}>Select low-res image</Text>
             </View>
           )}
         </View>
@@ -119,7 +172,7 @@ export default function RemoverScreen() {
           <>
             {loading ? (
                <TouchableOpacity style={styles.cancelButton} onPress={handleCancel}>
-                 <ActivityIndicator color="#fff" style={{marginRight: 8}}/>
+                 <Ionicons name="close-circle" size={20} color="#fff" />
                  <Text style={styles.buttonText}>Cancel</Text>
                </TouchableOpacity>
             ) : (
@@ -134,15 +187,15 @@ export default function RemoverScreen() {
                   onPress={handleProcess}
                   disabled={!image}
                 >
-                  <Ionicons name="flash" size={20} color="#fff" />
-                  <Text style={styles.buttonText}>Remove Background</Text>
+                  <Ionicons name="sparkles" size={20} color="#fff" />
+                  <Text style={styles.buttonText}>Enhance 4x</Text>
                 </TouchableOpacity>
               </>
             )}
           </>
         ) : (
           <View style={styles.resultActions}>
-             <TouchableOpacity style={styles.secondaryButton} onPress={() => { setProcessedImage(null); setImage(null); }}>
+            <TouchableOpacity style={styles.secondaryButton} onPress={() => { setProcessedImage(null); setImage(null); }}>
               <Ionicons name="refresh" size={20} color="#fff" />
               <Text style={styles.buttonText}>New</Text>
             </TouchableOpacity>
@@ -163,19 +216,20 @@ const styles = StyleSheet.create({
   headerTitle: { fontSize: 28, fontWeight: '800', color: '#fff', marginBottom: 20, textAlign: 'center', letterSpacing: 1 },
   card: { backgroundColor: '#1E1E1E', borderRadius: 20, padding: 10, marginBottom: 30, shadowColor: '#000', shadowOpacity: 0.5, shadowRadius: 10, elevation: 5 },
   imageContainer: { width: '100%', height: 350, borderRadius: 15, overflow: 'hidden', backgroundColor: '#252525', justifyContent: 'center', alignItems: 'center' },
-  image: { width: '100%', height: '100%', resizeMode: 'contain' },
-  placeholder: { width: '100%', height: '100%', justifyContent: 'center', alignItems: 'center' },
-  buttonContainer: { width: '100%', gap: 15 },
+  image: { width: '100%', height: '100%' },
+  placeholder: { alignItems: 'center', opacity: 0.7 },
+  placeholderText: { color: '#888', marginTop: 10, fontSize: 16 },
+  loadingContainer: { alignItems: 'center', gap: 15 },
+  loadingText: { color: '#BB86FC', fontSize: 16, fontWeight: '600' },
+  compareBadge: { position: 'absolute', bottom: 15, backgroundColor: 'rgba(0,0,0,0.7)', paddingHorizontal: 12, paddingVertical: 6, borderRadius: 20 },
+  compareText: { color: '#fff', fontSize: 12, fontWeight: 'bold', letterSpacing: 1 },
   controls: { gap: 15 },
   pickButton: { flexDirection: 'row', gap: 10, padding: 16, borderRadius: 12, backgroundColor: '#333', alignItems: 'center', justifyContent: 'center' },
-  primaryButton: { flexDirection: 'row', gap: 10, padding: 16, borderRadius: 12, backgroundColor: '#BB86FC', alignItems: 'center', justifyContent: 'center' },
+  primaryButton: { flexDirection: 'row', gap: 10, padding: 16, borderRadius: 12, backgroundColor: '#CF6679', alignItems: 'center', justifyContent: 'center' }, 
   cancelButton: { flexDirection: 'row', gap: 10, padding: 16, borderRadius: 12, backgroundColor: '#CF6679', alignItems: 'center', justifyContent: 'center', width: '100%' },
-  successButton: { flexDirection: 'row', gap: 10, padding: 16, borderRadius: 12, backgroundColor: '#03DAC6', alignItems: 'center', justifyContent: 'center', flex: 1 },
+  successButton: { flexDirection: 'row', gap: 10, padding: 16, borderRadius: 12, backgroundColor: '#03DAC6', alignItems: 'center', justifyContent: 'center', flex: 1 }, 
   secondaryButton: { flexDirection: 'row', gap: 10, padding: 16, borderRadius: 12, backgroundColor: '#333', alignItems: 'center', justifyContent: 'center', flex: 1 },
   buttonText: { fontWeight: '700', color: '#fff', fontSize: 16 },
   resultActions: { flexDirection: 'row', gap: 15 },
-  disabled: { opacity: 0.5 },
-  compareBadge: { position: 'absolute', bottom: 15, backgroundColor: 'rgba(0,0,0,0.7)', paddingHorizontal: 12, paddingVertical: 6, borderRadius: 20 },
-  compareText: { color: '#fff', fontSize: 12, fontWeight: 'bold', letterSpacing: 1 },
-  placeholderText: { color: '#888', marginTop: 10, fontSize: 16 },
+  disabled: { opacity: 0.5 }
 });
